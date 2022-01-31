@@ -5,6 +5,7 @@ import copy
 import logging
 import telegram_send
 import pandas as pd
+from functools import wraps
 from atexit import register
 from datetime import datetime
 from dotenv import load_dotenv
@@ -13,6 +14,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait, Select
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.chrome.service import Service
+from selenium.common.exceptions import WebDriverException
 
 
 def exit_handler():
@@ -22,10 +24,35 @@ def exit_handler():
     driver.close()
 
     end_time = datetime.now().strftime('%Y/%m/%d %H:%M:%S')
-    print("{0} – {1} has started.".format(end_time, PROGRAM_NAME))
+    print("{0} – {1} has stopped.".format(end_time, PROGRAM_NAME))
 
     # Print any information to console as required
     print("Driver closed")
+
+
+def driver_exception_handler(wait_time=10):
+    """Infinitely re-tries to query website for information until
+    website responds."""
+
+    def decorator(func):
+
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+
+            while True:
+                try:
+                    value = func(*args, **kwargs)
+                except WebDriverException:
+                    time.sleep(wait_time)
+                    driver.refresh()
+                else:
+                    break
+
+            return value
+
+        return wrapper
+
+    return decorator
 
 
 def get_contract_info(content):
@@ -82,11 +109,12 @@ def get_all_contracts(filename="etherscan.csv", wait_time=20):
     return info
 
 
+@driver_exception_handler()
 def github_search(keyword, language="Solidity", wait_time=20):
-    """Searches on Github's advanced search page,
-    https://github.com/search/advanced, with driver and provided
-    keyword for Advanced Search and language as Written in this language.
-    if a result is found it sends """
+    """Searches for a contract on Github's advanced search page,
+    https://github.com/search/advanced, with provided
+    keyword for 'Advanced Search' and language for 'Written in this language'.
+    if a result is found it sends a Telegram Message and returns the URL."""
 
     driver.get("https://github.com/search/advanced")
 
@@ -122,8 +150,10 @@ def github_search(keyword, language="Solidity", wait_time=20):
         return driver.current_url
 
 
-def get_last_n_contracts(n=10, wait_time=20):
-    """Returns a Python Dictionary with contracts."""
+@driver_exception_handler()
+def get_last_n_contracts(n=20, wait_time=20):
+    """Returns a Python Dictionary with the first n number of
+    specified contracts from etherscan's verified contracts page."""
 
     xpath_content = "/html/body/div[1]/main/div[2]/div[1]/div[2]/div/div/div[2]/table/tbody"
     driver.get("https://etherscan.io/contractsVerified/1?ps=100")
@@ -169,19 +199,20 @@ while True:
 
         # If a new contract is found
         if item not in last_contracts:
-            # Log the new contract from Etherscan
+            # Get the new contract's info
             found_contract = new_contracts[item]
+            found_contract_info = re.split(" ", found_contract)
 
             # Contract address eg. 0xf7sgf683hf...
-            contract_address = re.split(" ", found_contract)[0]
+            contract_address = found_contract_info[0]
             # Contract name eg. UniswapV3
-            contract_name = re.split(" ", found_contract)[1]
+            contract_name = found_contract_info[1]
 
             search_address = github_search(keyword=contract_address, language="")
-            if search_address == "No code in Github.":
+            if type(search_address) is str:
 
                 search_name = github_search(keyword=contract_name)
-                if search_name != "No code in Github":
+                if type(search_name) is not str:
                     # If contract found in Github update the list and log
                     logging.info([search_name, found_contract])
 
@@ -189,7 +220,7 @@ while True:
                 # If contract found in Github update the list and log
                 logging.info([search_address, found_contract])
 
-    # Update Dictionary
+    # Update Dictionary with latest contracts
     last_contracts = copy.copy(new_contracts)
 
     # Wait for 30 seconds
