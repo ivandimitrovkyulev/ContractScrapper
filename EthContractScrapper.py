@@ -3,8 +3,8 @@ import os
 import time
 import copy
 import logging
-import telegram_send
 import pandas as pd
+from requests import post
 from functools import wraps
 from atexit import register
 from datetime import datetime
@@ -143,9 +143,12 @@ def github_search(keyword, language="Solidity", wait_time=20):
         return "No code in Github."
 
     else:
-        message = "\nNew Contract found on Github:\n{0}".format(driver.current_url)
         # send the found contract to Telegram to notify
-        telegram_send.send(messages=[message])
+        message = "\nNew Contract found on Github:\n{0}".format(driver.current_url)
+        chat_id = os.getenv('CHROME_LOCATION')
+        data = {"chat_id": chat_id, "text": message}
+        # POST request to Telegram
+        post(URL, data)
 
         return driver.current_url
 
@@ -187,6 +190,9 @@ driver = webdriver.Chrome(service=Service(os.getenv('CHROME_LOCATION')))
 driver.minimize_window()
 # If program halts exit_handler function will get executed last
 register(exit_handler)
+
+# Configure settings to send Telegram message
+URL = "https://api.telegram.org/bot{}/sendMessage".format(os.getenv('TOKEN'))
 
 
 # Main While loop to listen for new projects every n secs
