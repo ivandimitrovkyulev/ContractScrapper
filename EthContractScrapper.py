@@ -30,31 +30,6 @@ def exit_handler():
     print("Driver closed")
 
 
-def driver_exception_handler(wait_time=10):
-    """Infinitely re-tries to query website for information until
-    website responds."""
-
-    def decorator(func):
-
-        @wraps(func)
-        def wrapper(*args, **kwargs):
-
-            while True:
-                try:
-                    value = func(*args, **kwargs)
-                except WebDriverException:
-                    time.sleep(wait_time)
-                    driver.refresh()
-                else:
-                    break
-
-            return value
-
-        return wrapper
-
-    return decorator
-
-
 def get_contract_info(content):
     """Extracts the information from the HTML table and
     and returns a Pandas DataFrame object."""
@@ -109,6 +84,31 @@ def get_all_contracts(filename="etherscan.csv", wait_time=20):
     return info
 
 
+def driver_exception_handler(wait_time=10):
+    """Infinitely re-tries to query website for information until
+    website responds."""
+
+    def decorator(func):
+
+        @wraps(func)
+        def wrapper(*args, **kwargs):
+
+            while True:
+                try:
+                    value = func(*args, **kwargs)
+                except WebDriverException:
+                    time.sleep(wait_time)
+                    driver.refresh()
+                else:
+                    break
+
+            return value
+
+        return wrapper
+
+    return decorator
+
+
 @driver_exception_handler()
 def github_search(keyword, language="Solidity", wait_time=20):
     """Searches for a contract on Github's advanced search page,
@@ -145,8 +145,8 @@ def github_search(keyword, language="Solidity", wait_time=20):
     else:
         # send the found contract to Telegram to notify
         message = "\nNew Contract found on Github:\n{0}".format(driver.current_url)
-        chat_id = os.getenv('CHROME_LOCATION')
-        data = {"chat_id": chat_id, "text": message}
+        chat_id = os.getenv('CHAT_ID')
+        data = {"chat_id": chat_id, "text": message, "disable_web_page_preview": True}
         # POST request to Telegram
         post(URL, data)
 
@@ -215,10 +215,10 @@ while True:
             contract_name = found_contract_info[1]
 
             search_address = github_search(keyword=contract_address, language="")
-            if type(search_address) is str:
+            if search_address == "No code in Github.":
 
                 search_name = github_search(keyword=contract_name)
-                if type(search_name) is not str:
+                if search_name != "No code in Github.":
                     # If contract found in Github update the list and log
                     logging.info([search_name, found_contract])
 
