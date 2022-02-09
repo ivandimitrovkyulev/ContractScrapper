@@ -1,11 +1,24 @@
+"""
+This script scans etherscan.io or ftmscan.com for new Verified Smart Contracts and then
+checks whether they have repos on Github using either contract address or contract name.
+It looks for repositories written in Solidity. If a contract is found on Github a notification
+with the repo link is sent to a specified Telegram chat. The script saves all the found contracts
+in a .log file inside your working directory.
+
+Usage:
+python3 EthContractScrapper.py eth # for etherscan.io
+python3 EthContractScrapper.py ftm # for ftmscan.com
+"""
+
 import re
 import os
-import sys
 import copy
 import time
 import logging
+import argparse
+from typing import Callable
 import pandas as pd
-from requests import post
+from requests import post, Response
 from functools import wraps
 from atexit import register
 from datetime import datetime
@@ -16,33 +29,45 @@ from selenium.webdriver.support.ui import WebDriverWait, Select
 from selenium.webdriver.support import expected_conditions as ec
 from selenium.webdriver.chrome.service import Service
 from selenium.common.exceptions import WebDriverException
+from selenium.webdriver.remote.webelement import WebElement
 
 
-def exit_handler():
-    """This function must only execute before the end of the process."""
+def exit_handler(
+        name: str = "Program",
+) -> None:
+    """This function will only execute before the end of the process.
+    name: Program name"""
 
     # Make sure driver is closed if any part of the program returns an error
     driver.close()
 
+    # Timestamp of when the program terminated
     end_time = datetime.now().strftime('%Y/%m/%d %H:%M:%S')
-    print("{0} – {1} has stopped.".format(end_time, program_name))
 
     # Print any information to console as required
-    print("Driver closed")
+    print("{0} – {1} has stopped.".format(end_time, name))
+    print("Driver closed.")
 
 
-def get_contract_info(content):
-    """Extracts the information from the HTML table and
-    and returns a Pandas DataFrame object."""
+def html_table_to_df(
+        content: WebElement,
+        column_names: list,
+) -> pd.DataFrame:
+    """Extracts the information from a HTML table,
+    constructs and returns a Pandas DataFrame object of it.
 
-    column_names = ["Address", "Contract Name", "Compiler", "Version", "Balance",
-                    "Txns", "Setting", "Verified", "Audited", "License"]
+    content: a Selenium WebElement that is a HTML Table
+    column_names: A list of column names that matches the HTML table"""
 
+    # All contracts
     all_contracts = []
+    # Iterate all contracts
     rows = content.find_elements(By.TAG_NAME, "tr")
     for row in rows:
 
+        # All info of a single contract
         contract_info = []
+        # Iterate all info in a contract
         columns = row.find_elements(By.TAG_NAME, "td")
         for col in columns:
 
@@ -54,25 +79,37 @@ def get_contract_info(content):
     return df
 
 
-def get_all_contracts(filename="etherscan.csv", wait_time=20):
-    """Collects latest verified contracts from etherscan.io and combines
-    them into a Pandas DataFrame. It then saves the DataFrame to the
-    provided .csv file."""
+def get_all_contracts(
+        website: str,
+        filename: str = "contracts.csv",
+        wait_time: int = 20,
+        column_names=None,
+) -> pd.DataFrame:
+    """Collects latest verified contracts and combines
+    them into a Pandas DataFrame object and exports it to
+    a specified .csv file.
 
-    driver.get("https://etherscan.io/contractsVerified/1?ps=100")
+    filename: name of file where data will be saved
+    wait_time: maximum no. of seconds to wait for a WebElement
+    column_names: list of column names for the pandas DataFrame object"""
+
+    url = "https://{}/contractsVerified/1?ps=100".format(website)
+    driver.get(url)
 
     pages = []
+    # Iterate through all the web pages
     while True:
         xpath_content = "/html/body/div[1]/main/div[2]/div[1]/div[2]/div/div/div[2]/table/tbody"
         content = WebDriverWait(driver, wait_time).until(ec.presence_of_element_located(
             (By.XPATH, xpath_content)))
 
-        page_info = get_contract_info(content)
+        page_info = html_table_to_df(content, column_names)
         pages.append(page_info)
 
         # Go to the next page
         xpath_button = "/html/body/div[1]/main/div[2]/div[1]/div[2]/div/div/form/div[3]/ul/li[4]"
-        next_page = WebDriverWait(driver, wait_time).until(ec.presence_of_element_located((By.XPATH, xpath_button)))
+        next_page = WebDriverWait(driver, wait_time).until(ec.presence_of_element_located(
+            (By.XPATH, xpath_button)))
 
         if len(next_page.find_elements(By.TAG_NAME, "a")) == 0:
             break
@@ -85,9 +122,13 @@ def get_all_contracts(filename="etherscan.csv", wait_time=20):
     return info
 
 
-def driver_exception_handler(wait_time=10):
-    """Infinitely re-tries to query website for information until
-    website responds."""
+def driver_wait_exception_handler(
+        wait_time: int = 10,
+) -> Callable[[f], f]:
+    """ Decorator that infinitely re-tries to query website for information until
+    the website responds. Useful when websites enforce a query limit.
+
+    wait_time: No. of seconds to wait until refreshes pages and tries again"""
 
     def decorator(func):
 
@@ -97,10 +138,14 @@ def driver_exception_handler(wait_time=10):
             while True:
                 try:
                     value = func(*args, **kwargs)
+
                 except WebDriverException:
+                    # if unable to get WebElement - wait, refresh & repeat
                     time.sleep(wait_time)
                     driver.refresh()
+
                 else:
+                    # if able to retrieve WebElement break loop
                     break
 
             return value
@@ -110,12 +155,20 @@ def driver_exception_handler(wait_time=10):
     return decorator
 
 
-@driver_exception_handler()
-def github_search(keyword, link, language="Solidity", wait_time=20):
+@driver_wait_exception_handler()
+def github_search(
+        keyword: str,
+        language: str,
+        wait_time: int = 20,
+        max_results: int = 5,
+) -> str or None:
     """Searches for a project on Github's advanced search page,
-    https://github.com/search/advanced, with provided
-    keyword for 'Advanced Search' and language for 'Written in this language'.
-    If a result is found it sends a Telegram Message and returns the URL."""
+    https://github.com/search/advanced.
+
+    keyword: text to search with in the 'Advanced Search' field
+    language: programming language to be written in
+    wait_time: max no. of seconds to wait for WebElement
+    max_results: searches with more returned results will be discarded"""
 
     driver.get("https://github.com/search/advanced")
 
@@ -127,6 +180,8 @@ def github_search(keyword, link, language="Solidity", wait_time=20):
 
     # Check if language search parameter is required.
     if language != "":
+        language = language.lower()
+        language = language[0].upper() + language[1:]
         xpath_language = "/html/body/div[4]/main/form/div[2]/fieldset[1]/dl[4]/dd/select"
         select_language = Select(WebDriverWait(driver, wait_time).until(ec.presence_of_element_located(
             (By.XPATH, xpath_language))))
@@ -140,7 +195,7 @@ def github_search(keyword, link, language="Solidity", wait_time=20):
     result = WebDriverWait(driver, wait_time).until(ec.presence_of_element_located(
         (By.XPATH, xpath_result)))
 
-    # If no results found return. Code below this line assumes at least 1 result is returned
+    # If no results found return None. Code below this line assumes at least 1 result is returned
     if "We couldn’t find any" in result.text:
         return None
 
@@ -155,25 +210,64 @@ def github_search(keyword, link, language="Solidity", wait_time=20):
     number = int(re.sub(",", "", number))
 
     # Check if search returns more results than required
-    if number > 5:
+    if number > max_results:
         return None
 
-    # Prepare to send a notification on Telegram with the found contract
-    message = "\nNew {0} Contract on Github:\n{1}".format(
-                link, driver.current_url)
-    data = {"chat_id": chat_id, "text": message, "disable_web_page_preview": True}
-    # POST request to Telegram
-    post(URL, data)
-
+    # if a result is found - return the github results' list url
     return driver.current_url
 
 
-@driver_exception_handler()
-def get_last_n_contracts(chain, n=20, wait_time=20):
-    """Returns a Python Dictionary with the first n number of
-    specified contracts from etherscan's verified contracts page."""
+def telegram_send_message(
+        message_text: str,
+        disable_web_page_preview: bool = True,
+        telegram_token: str = "",
+        telegram_chat_id: str = "",
+) -> Response:
+    """Sends a Telegram message to a specified chat.
+    Must have a .env file with the following variables:
+    TOKEN: your Telegram access token.
+    CHAT_ID: the specific id of the chat you want the message sent to
+    Follow telegram's instruction of how to set up a bot using the bot father
+    and configure it to be able to send messages to a chat.
 
-    driver.get("https://{0}/contractsVerified/1?ps=100".format(chain))
+    message: Text to be sent to the chat
+    disable_web_page_preview: Set web preview on/off
+    telegram_token: Telegram TOKEN API
+    telegram_chat_id: Telegram chat ID"""
+
+    # if URL not provided try TOKEN variable from a .env file
+    load_dotenv()
+    if telegram_token == "":
+        telegram_token = os.getenv('TOKEN')
+
+    # if chat_id not provided try CHAT_ID variable from a .env file
+    if telegram_chat_id == "":
+        telegram_chat_id = os.getenv('CHAT_ID')
+
+    # construct url using token for a sendMessage POST request
+    url = "https://api.telegram.org/bot{}/sendMessage".format(telegram_token)
+
+    # Construct data for the request
+    data = {"chat_id": telegram_chat_id, "text": message_text,
+            "disable_web_page_preview": disable_web_page_preview}
+
+    # send the POST request
+    response = post(url, data)
+
+    return response
+
+
+@driver_wait_exception_handler()
+def get_last_n_contracts(
+        website: str,
+        n: int = 20,
+        wait_time: int = 20,
+) -> dict:
+    """Returns a Python Dictionary with the first n number of
+    specified contracts from the verified contracts page."""
+
+    url = "https://{0}/contractsVerified/1?ps=100".format(website)
+    driver.get(url)
 
     xpath_content = "/html/body/div[1]/main/div[2]/div[1]/div[2]/div/div/div[2]/table/tbody"
     content = WebDriverWait(driver, wait_time).until(ec.presence_of_element_located(
@@ -190,42 +284,41 @@ def get_last_n_contracts(chain, n=20, wait_time=20):
     return return_dict
 
 
-# Get argument values to run script
-try:
-    if sys.argv[1] == '0':
-        chain_name = "etherscan"
-        chain_url = "etherscan.io"
-    elif sys.argv[1] == '1':
-        chain_name = "ftmscan"
-        chain_url = "ftmscan.com"
-    else:
-        print("Argument must be 0 or 1.")
-        sys.exit()
-except IndexError:
-    print("Must provide a second argument - 0 for etherscan.io, 1 for ftmscan.com")
-    sys.exit()
+# Get and check argument values to run the script
+CLI = argparse.ArgumentParser()
+CLI.add_argument("argument", type=str)
+arg = CLI.parse_args()
+
+if arg.argument.lower() == "eth":
+    chain_name = "etherscan"
+    chain_url = "etherscan.io"
+elif arg.argument.lower() == "ftm":
+    chain_name = "ftmscan"
+    chain_url = "ftmscan.com"
+else:
+    CLI.exit(message="Must provide the correct argument - eth for etherscan.io, ftm for ftmscan.com")
+
 
 # Start of script
 start_time = datetime.now().strftime('%Y/%m/%d %H:%M:%S')
 program_name = os.path.basename(__file__)
 print("{0} – {1} has started screening https://{2}.".format(start_time, program_name, chain_url))
 
+contract_columns = ["Address", "Contract Name", "Compiler", "Version", "Balance",
+                    "Txns", "Setting", "Verified", "Audited", "License"]
 
 # Configure logging settings for the Application
 logging.basicConfig(filename='{}.log'.format(chain_name), filemode='a',
                     format='%(asctime)s - %(message)s',
                     level=logging.INFO, datefmt='%Y/%m/%d %H:%M:%S')
 
-# Load Chrome driver from OS from .env file then load webdriver and minimize window.
+# Parse the .env file and load its variables
 load_dotenv()
+# load Chrome driver
 driver = webdriver.Chrome(service=Service(os.getenv('CHROME_LOCATION')))
 driver.minimize_window()
-# If program halts exit_handler function will get executed last
-register(exit_handler)
-
-# Configure settings to send Telegram message
-URL = "https://api.telegram.org/bot{}/sendMessage".format(os.getenv('TOKEN'))
-chat_id = os.getenv('CHAT_ID')
+# exit_handler will be the last executed function before program halts
+register(exit_handler(program_name))
 
 
 # Main While loop to listen for new projects every n secs
@@ -247,15 +340,22 @@ while True:
             # Contract name eg. UniswapV3
             contract_name = found_contract_info[1]
 
-            search_address = github_search(keyword=contract_address, link=chain_url, language="")
+            search_address = github_search(keyword=contract_address, link=chain_url)
             if search_address is None:
 
-                search_name = github_search(keyword=contract_name, link=chain_url)
-                # Update the list and log
-                logging.info([search_name, found_contract])
+                search_name = github_search(keyword=contract_name, link=chain_url, language="Solidity")
+                if search_name is str:
+                    message = "\nNew {0} Contract on Github:\n{1}".format(
+                                chain_url, search_name)
+                    # send telegram message and log info
+                    telegram_send_message(message)
+                    logging.info([search_name, found_contract])
 
             else:
-                # Update the list and log
+                message = "\nNew {0} Contract on Github:\n{1}".format(
+                            chain_url, search_address)
+                # send telegram message and log info
+                telegram_send_message(message)
                 logging.info([search_address, found_contract])
 
     # Update Dictionary with latest contracts

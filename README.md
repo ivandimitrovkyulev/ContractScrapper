@@ -22,7 +22,8 @@ Create a virtual environment in the current working directory and activate it:
 
 ```
 python3 -m venv <current-directory>
-
+```
+```
 source <current-directory>/bin/activate
 ```
 
@@ -42,12 +43,12 @@ CHAT_ID=<the-id-of-your-telegram-chat>
 #
 ## Running the script 
 
-For [Etherscan](etherscan.io):
+For [Etherscan](https://etherscan.io):
 ```
 python3 EthContractScrapper.py 0
 ```
 
-For [Fantomscan](ftmscan.com):
+For [Fantomscan](https://ftmscan.com):
 
 ```
 python3 EthContractScrapper.py 1
