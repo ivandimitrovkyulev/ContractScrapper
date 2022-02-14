@@ -25,112 +25,154 @@ from selenium.webdriver.chrome.service import Service
 
 from helpers import (
     exit_handler,
-    get_all_contracts,
     github_search,
-    telegram_send_message,
     get_last_n_contracts,
+    telegram_send_message,
+    get_all_contracts,
     CustomAction,
     formated,
-
+    dict_complement_b,
+    TextFormat,
 )
 
-
-# Set up arguments, values and settings for CLI interface
+# Set up arguments, values and settings for the CLI
 software_ver = "1.0.0"
-web_choices = ("eth", "eth-test", "ftm", "ftm-test")
+web_choices = ("etherscan.io", "ropsten.etherscan.io", "kovan.etherscan.io", "rinkeby.etherscan.io",
+               "goerli.etherscan.io", "beacon.etherscan.io", "ftmscan.com", "testnet.ftmscan.com",)
+type_search = ("repositories", "code", "commits", "issues", "discussions",
+               "registrypackages", "marketplace", "topics", "wikis", "users")
 
+# Create CLI interface
 parser = ArgumentParser(
-    usage="python %(prog)s [-s {0} {1}] [-c {0} {2}]".format(
-        formated("website", 'U'), formated("search limit", 'U'), formated("filename", 'U')),
+    usage="python %(prog)s {0} [-s {1} {2} {3}] [-c {4}]".format(
+        formated("website"), formated("limit"), formated("type"),
+        formated("comments"), formated("filename")),
     description="Scrapes smart contracts and checks if they have a github repository. "
-                "Visit https://github.com/ivandimitrovkyulev/ContractScrapper for more info.",
-    epilog=f"ContractScrapper {software_ver}",)
+                "Visit {0}https://github.com/ivandimitrovkyulev/ContractScrapper{1} "
+                "for more info.".format(TextFormat.U, TextFormat.END),
+    epilog=f"Version - ContractScrapper {software_ver}", )
 
-parser.version = software_ver
+# Add all the neccessary CLI arguments
+parser.add_argument("website", action="store", type=str, choices=web_choices,
+                    metavar=formated("website"),
+                    help="Select from the following options: {}".format(web_choices))
 
-parser.add_argument("-s", action=CustomAction, type=str, dest="scrape", nargs=2, options=web_choices,
-                    metavar=(formated("website", 'U'), formated("search limit", 'U')),
-                    help="Continuously scraping for new verified contracts from the website and checks if they have a "
-                         "Github repository. If successful, sends a Telegram message with the results to a specified "
-                         "chat. Also keeps a .log file with the results. Kill the script to exit.",
-                    )
+parser.add_argument("-s", action=CustomAction, type=str, dest="scrape", nargs='*',
+                    options=type_search,
+                    metavar=formated("limit"),
+                    help="Continuously scraping for new verified contracts from {0} and checks if they have a "
+                         "Github repository. If something is found it sends a Telegram message with the results to "
+                         "a specified chat. Also keeps a .log file with the results. Kill the script to exit.".format(
+                        formated("website")))
 
-parser.add_argument("-c", action=CustomAction, type=str, dest="contracts", nargs=2, options=web_choices,
-                    metavar=(formated("website", 'U'), formated("filename", 'U')),
-                    help="Gets all the currently available verified contracts from the website "
-                         "and saves them to filename.csv")
+parser.add_argument("-c", action="store", type=str, dest="contracts",
+                    metavar=formated("filename"),
+                    help="Gets all the currently available verified contracts from the {0}website{1} "
+                         "and saves them to {0}filename{1}.csv".format(TextFormat.U, TextFormat.END))
 
-parser.add_argument("-V", "--version", action="version",
-                    help="Prints the current version.")
-
-args = parser.parse_args()
+parser.add_argument("-V", "--version", action="version", version=software_ver,
+                    help="Prints the current version of the script.")
 
 # Parse the .env file and load its variables
 load_dotenv()
-# load Chrome driver
-driver = Chrome(service=Service(os.getenv('CHROME_LOCATION')))
-driver.minimize_window()
-# exit_handler will be the last executed function before program halts
+
+# Name of website to be scrapped
+args = parser.parse_args()
+web_url = args.website
 program_name = os.path.basename(__file__)
-register(exit_handler(program_name))
-
-if args.scrape:
-    web_url = 0
-    web_name = 0
-
-
-# Start of script
-start_time = datetime.now().strftime('%Y/%m/%d %H:%M:%S')
-print("{0} – {1} has started screening https://{2}.".format(start_time, program_name, web_url))
-
-contract_columns = ["Address", "Contract Name", "Compiler", "Version", "Balance",
-                    "Txns", "Setting", "Verified", "Audited", "License"]
+program_dir = os.path.dirname(__file__)
+web_name = re.sub("\.", "-", web_url)
 
 # Configure logging settings for the Application
-logging.basicConfig(filename='{}.log'.format(web_name), filemode='a',
+logging.basicConfig(filename=f"log_files/{web_name}.log", filemode='a',
                     format='%(asctime)s - %(message)s',
                     level=logging.INFO, datefmt='%Y/%m/%d %H:%M:%S')
 
+contract_cols = ["Address", "Contract Name", "Compiler", "Version", "Balance",
+                 "Txns", "Setting", "Verified", "Audited", "License"]
 
-# Main While loop to listen for new projects every n secs
-last_contracts = get_last_n_contracts(driver, web_url)
-while True:
-    new_contracts = get_last_n_contracts(driver, web_url)
+# If website argument provided, load driver
+if args.website and (args.contracts or args.scrape):
+    # load Chrome driver and minimize window
+    driver = Chrome(service=Service(os.getenv('CHROME_LOCATION')))
+    driver.minimize_window()
 
-    # Check for any new contracts. If found search them on Github
-    for item in new_contracts:
+    # Start scraping
+    start_time = datetime.now().strftime('%Y/%m/%d %H:%M:%S')
+    print("{0} – {1} has started screening https://{2}".format(start_time, program_name, web_url))
+else:
+    parser.exit(0, "Please provide another argument.")
 
-        # If a new contract is found
-        if item not in last_contracts:
-            # Get the new contract's info
-            found_contract = new_contracts[item]
-            found_contract_info = re.split(" ", found_contract)
+# If -c contracts is triggered
+if args.contracts:
+    filename = args.contracts + ".csv"
+
+    # Get all verified contracts and export to .csv
+    get_all_contracts(driver, website_name=web_url, column_names=contract_cols, filename=filename)
+
+    print("{0} - {1} has stopped.".format(datetime.now().strftime('%Y/%m/%d %H:%M:%S'), program_name))
+    driver.close()
+    print("Driver closed.")
+    print("Contracts saved to {}".format(filename))
+
+# If -s scrape is triggered
+if args.scrape:
+    # Exit handler function
+    register(exit_handler, driver=driver, name=program_name)
+
+    func_args = []
+    try:
+        # try to append limit
+        func_args.append(args.scrape[0])
+        # try to append type
+        func_args.append(args.scrape[1])
+        # try to append comments
+        func_args.append(args.scrape[2])
+    except IndexError:
+        pass
+
+    print(f"Started logging in log_files/{web_name}.log")
+
+    old_contracts = get_last_n_contracts(driver, web_url)
+    while True:
+        new_contracts = get_last_n_contracts(driver, web_url)
+
+        # Compare dicts and return new ones
+        found_contracts = dict_complement_b(old_contracts, new_contracts)
+        for key, value in found_contracts.items():
 
             # Contract address eg. 0xf7sgf683hf...
-            contract_address = found_contract_info[0]
+            contract_address = re.split(" ", value)[0]
             # Contract name eg. UniswapV3
-            contract_name = found_contract_info[1]
+            contract_name = re.split(" ", value)[1]
 
-            search_address = github_search(keyword=contract_address, link=web_url)
-            if search_address is None:
+            # Search with contract's address first
+            search_address = github_search(driver, contract_address, "Solidity", *func_args)
 
-                search_name = github_search(keyword=contract_name, link=web_url, language="Solidity")
-                if search_name is str:
-                    message = "\nNew {0} Contract on Github:\n{1}".format(
-                                web_url, search_name)
-                    # send telegram message and log info
-                    telegram_send_message(message)
-                    logging.info([search_name, found_contract])
+            if search_address is str:
+                # Send telegram message
+                message = "\nNew {0} Contract on Github:\n{1}".format(web_url, search_address)
+                telegram_send_message(message)
+                # Log info
+                logging.info([search_address, value])
 
             else:
-                message = "\nNew {0} Contract on Github:\n{1}".format(
-                            web_url, search_address)
-                # send telegram message and log info
-                telegram_send_message(message)
-                logging.info([search_address, found_contract])
+                # Then try with contract's name
+                search_name = github_search(driver, contract_name, "Solidity", *func_args)
 
-    # Update Dictionary with latest contracts
-    last_contracts = copy.copy(new_contracts)
+                if search_name is str:
+                    # Send telegram message
+                    message = "\nNew {0} Contract on Github:\n{1}".format(web_url, search_name)
+                    telegram_send_message(message)
+                    # Log info
+                    logging.info([search_name, value])
 
-    # Wait for 30 seconds
-    sleep(30)
+                else:
+                    # Log info
+                    logging.info([search_name, value])
+
+        # Update Dictionary with latest contracts
+        old_contracts = copy.copy(new_contracts)
+
+        # Wait for 30 seconds
+        sleep(30)

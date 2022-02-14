@@ -25,16 +25,12 @@ from pandas import (
     DataFrame,
     concat,
 )
-
 from selenium.webdriver import Chrome
 from selenium.webdriver.support import expected_conditions as ec
 from selenium.webdriver.common.by import By
 from selenium.webdriver.remote.webelement import WebElement
-from selenium.webdriver.support.ui import (
-    WebDriverWait,
-    Select,
-)
-from selenium.common.exceptions import WebDriverException
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.common.exceptions import WebDriverException, TimeoutException
 
 
 # Define a Function type
@@ -46,7 +42,7 @@ class TextFormat:
 
     B = '\033[1m'  # Bold
     U = '\033[4m'  # Underline
-    I = '\x1B[3m'  # Italic
+    IT = '\x1B[3m'  # Italic
     RED = '\033[91m'
     GREEN = '\033[92m'
     BLUE = '\033[94m'
@@ -56,7 +52,7 @@ class TextFormat:
 
 def formated(
         text: str,
-        style: str = 'B',
+        style: str = 'U',
 ) -> str:
     """Re formats the Text with the specified style.
     Defaults to bold.
@@ -76,28 +72,65 @@ def formated(
     return styled_text
 
 
+def dict_complement_b(
+        old_dict: dict,
+        new_dict: dict,
+) -> Dict[str, str]:
+    """Compares dictionary A & B and returns the relative complement of A in B.
+    Basically returns all members in B that are not in A as a python dictionary."""
+
+    b_complement = {k: new_dict[k] for k in new_dict if k not in old_dict}
+
+    return b_complement
+
+
 class CustomAction(Action):
     def __init__(self, options, *args, **kwargs):
         self.options = options
         super(CustomAction, self).__init__(*args, **kwargs)
 
     def __call__(self, parser, namespace, values, option_string=None):
-        if values[0] in self.options:
-            setattr(namespace, self.dest, values)
-        else:
+
+        if len(values) > 3:
             ArgumentParser().error(
-                message="argument {0}: invalid choice: '{1}', choose from {2}".format(
-                    option_string, values[0], self.options))
+                message="argument {0}: {1} arguments provided, expected max {2}".format(
+                    option_string, len(values), 3))
+
+        try:
+            if int(values[0]) >= 0:
+                setattr(namespace, self.dest, values)
+            else:
+                ArgumentParser().error(
+                    message="argument {0}: invalid choice: '{1}', choose value >= 0".format(
+                        option_string, values[0]))
+
+            if values[1] in self.options:
+                setattr(namespace, self.dest, values)
+            else:
+                ArgumentParser().error(
+                    message="argument {0}: invalid choice: '{1}', choose from {2}".format(
+                        option_string, values[1], self.options))
+
+            if int(values[2]) >= 0:
+                setattr(namespace, self.dest, values)
+            else:
+                ArgumentParser().error(
+                    message="argument {0}: invalid choice: '{1}', choose value >= 0".format(
+                        option_string, values[2]))
+        except IndexError:
+            pass
 
 
 def exit_handler(
         driver: Chrome,
         name: str = "Program",
+        message: str = "",
 ) -> None:
     """This function will only execute before the end of the process.
 
     driver: Selenium webdriver object
-    name: Program name"""
+    name: Program name
+    message: optional message to include"""
 
     # Make sure driver is closed if any part of the program returns an error
     driver.close()
@@ -106,6 +139,7 @@ def exit_handler(
     end_time = datetime.now().strftime('%Y/%m/%d %H:%M:%S')
 
     # Print any information to console as required
+    print(message)
     print("{0} – {1} has stopped.".format(end_time, name))
     print("Driver closed.")
 
@@ -128,8 +162,8 @@ def driver_wait_exception_handler(
                 try:
                     value = func(*args, **kwargs)
 
-                except WebDriverException:
-                    # if unable to get WebElement - wait, refresh & repeat
+                except WebDriverException or TimeoutException:
+                    # if unable to get WebElement - wait & repeat
                     sleep(wait_time)
 
                 else:
@@ -146,6 +180,7 @@ def driver_wait_exception_handler(
 def html_table_to_df(
         content: WebElement,
         column_names: List[str],
+        limit: int = 10000,
 ) -> DataFrame:
     """Extracts the information from a HTML table,
     constructs and returns a Pandas DataFrame object of it.
@@ -155,17 +190,16 @@ def html_table_to_df(
 
     # All data
     all_data = []
-    # Iterate all table elements
+    # Iterate through all table rows
     rows = content.find_elements(By.TAG_NAME, "tr")
-    for row in rows:
+    for index, row in enumerate(rows):
+        # if limit reached - break
+        if index == limit:
+            break
 
-        # All info of a single element
-        element_info = []
-        # Iterate all info in a contract
+        # Iterate through all columns in a row
         columns = row.find_elements(By.TAG_NAME, "td")
-        for col in columns:
-
-            element_info.append(col.text)
+        element_info = [col.text for col in columns]
 
         all_data.append(element_info)
 
@@ -173,9 +207,10 @@ def html_table_to_df(
     return df
 
 
+@driver_wait_exception_handler()
 def get_all_contracts(
         driver: Chrome,
-        website: str,
+        website_name: str,
         column_names: List[str],
         filename: str = "contracts.csv",
         wait_time: int = 20,
@@ -185,32 +220,34 @@ def get_all_contracts(
     a specified .csv file.
 
     driver: Selenium webdriver object
+    website_name: partial name of website eg. etherscan.io
+    column_names: list of column names to use in DataFrame construction
     filename: name of file where data will be saved
-    wait_time: maximum no. of seconds to wait for a WebElement
-    column_names: list of column names for the pandas DataFrame object"""
+    wait_time: maximum no. of seconds to wait for a WebElement"""
 
-    url = "https://{}/contractsVerified/1?ps=100".format(website)
+    url = "https://{0}/contractsVerified/1?ps=100".format(website_name)
     driver.get(url)
 
     pages = []
     # Iterate through all the web pages
     while True:
-        xpath_content = "/html/body/div[1]/main/div[2]/div[1]/div[2]/div/div/div[2]/table/tbody"
+        # Get data from the HTML table for each page
+        css_content = "#transfers > div.table-responsive.mb-2.mb-md-0 > table > tbody"
         content = WebDriverWait(driver, wait_time).until(ec.presence_of_element_located(
-            (By.XPATH, xpath_content)))
+            (By.CSS_SELECTOR, css_content)))
 
+        # Construct DataFrame with each HTML table and save in list
         page_info = html_table_to_df(content, column_names)
         pages.append(page_info)
 
         # Go to the next page
-        xpath_button = "/html/body/div[1]/main/div[2]/div[1]/div[2]/div/div/form/div[3]/ul/li[4]"
-        next_page = WebDriverWait(driver, wait_time).until(ec.presence_of_element_located(
-            (By.XPATH, xpath_button)))
+        try:
+            next_page = WebDriverWait(driver, wait_time).until(ec.presence_of_element_located(
+                (By.PARTIAL_LINK_TEXT, "Next")))
+            next_page.click()
 
-        if len(next_page.find_elements(By.TAG_NAME, "a")) == 0:
+        except WebDriverException:
             break
-
-        next_page.click()
 
     info = concat(pages, ignore_index=True)
     info.to_csv(filename)
@@ -220,9 +257,9 @@ def get_all_contracts(
 
 def telegram_send_message(
         message_text: str,
+        disable_web_page_preview: bool = True,
         telegram_token: Optional[str] = "",
         telegram_chat_id: Optional[str] = "",
-        disable_web_page_preview: bool = True,
 ) -> Response:
     r"""Sends a Telegram message to a specified chat.
     Must have a .env file with the following variables:
@@ -236,12 +273,12 @@ def telegram_send_message(
     telegram_token: Telegram TOKEN API
     telegram_chat_id: Telegram chat ID"""
 
-    # if URL not provided try TOKEN variable from a .env file
+    # if URL not provided - try TOKEN variable from the .env file
     load_dotenv()
     if telegram_token == "":
         telegram_token = str(os.getenv('TOKEN'))
 
-    # if chat_id not provided try CHAT_ID variable from a .env file
+    # if chat_id not provided - try CHAT_ID variable from the .env file
     if telegram_chat_id == "":
         telegram_chat_id = str(os.getenv('CHAT_ID'))
 
@@ -262,11 +299,11 @@ def telegram_send_message(
 def get_last_n_contracts(
         driver: Chrome,
         website: str,
-        n: int = 20,
+        n: int = 15,
         wait_time: int = 20,
 ) -> Dict[str, str]:
-    """Returns a Python Dictionary with the first n number of
-    specified contracts from the verified contracts page.
+    """Returns a Python Dictionary with the first n number of specified contracts
+    from the verified contracts page.
 
     driver: Selenium webdriver object
     website: website URL"""
@@ -290,14 +327,15 @@ def get_last_n_contracts(
     return return_dict
 
 
-@driver_wait_exception_handler()
 def github_search(
         driver: Chrome,
         keyword: str,
-        language: str,
-        wait_time: int = 15,
-        max_results: int = 5,
-) -> Union[None, str]:
+        lang: str = "Solidity",
+        limit: str = 7,
+        type_search: str = "repositories",
+        comments: str = 0,
+        wait_time: int = 3,
+) -> Union[str, None]:
     """Searches for a project on Github's advanced search page,
     https://github.com/search/advanced.
 
@@ -307,48 +345,38 @@ def github_search(
     wait_time: max no. of seconds to wait for WebElement
     max_results: searches with more returned results will be discarded"""
 
-    driver.get("https://github.com/search/advanced")
+    if lang != "":
+        lang = lang.lower()
+        lang = lang[0].upper() + lang[1:]
 
-    xpath_advanced_search = "/html/body/div[4]/main/form/div[1]/div/div/div[1]/label/input"
-    advanced_search = WebDriverWait(driver, wait_time).until(ec.presence_of_element_located(
-        (By.XPATH, xpath_advanced_search)))
-    advanced_search.clear()
-    advanced_search.send_keys(keyword)
+    # Construct query URL
+    url = "https://github.com/search?q={0}+language:{1}+comments:{2}&type={3}".format(
+        keyword, lang, comments, type_search)
+    driver.get(url)
 
-    # Check if language search parameter is required.
-    if language != "":
-        language = language.lower()
-        language = language[0].upper() + language[1:]
-        xpath_language = "/html/body/div[4]/main/form/div[2]/fieldset[1]/dl[4]/dd/select"
-        select_language = Select(WebDriverWait(driver, wait_time).until(ec.presence_of_element_located(
-            (By.XPATH, xpath_language))))
-        select_language.select_by_visible_text(language)
+    while True:
+        try:
+            # Number of repositories returned by the search
+            css_search_result = "#js-pjax-container > div > div.col-12.col-md-9.float-left.px-2." \
+                                "pt-3.pt-md-0.codesearch-results > div > div > h3"
+            result_number = WebDriverWait(driver, wait_time).until(ec.presence_of_element_located(
+                (By.CSS_SELECTOR, css_search_result)))
+        except TimeoutException:
+            sleep(5)
+            driver.refresh()
+        else:
+            break
 
-    xpath_button = "/html/body/div[4]/main/form/div[1]/div/div/div[2]/button"
-    WebDriverWait(driver, wait_time).until(ec.presence_of_element_located(
-        (By.XPATH, xpath_button))).click()
-
-    xpath_result = "//*[@id='js-pjax-container']/div/div[3]/div/div/h3"
-    result = WebDriverWait(driver, wait_time).until(ec.presence_of_element_located(
-        (By.XPATH, xpath_result)))
-
-    # If no results found return None. Code below this line assumes at least 1 result is returned
-    if "We couldn’t find any" in result.text:
+    # If no results return None
+    if "We couldn’t find any" in result_number.text:
         return None
 
-    # Check for how many repository results the search returned
-    classname_result_number = "#js-pjax-container > div > div.col-12.col-md-9.float-left.px-2.pt-3.pt-md-0" \
-                              ".codesearch-results > div > div.d-flex.flex-column.flex-md-row.flex-justify-between" \
-                              ".border-bottom.pb-3.position-relative"
-    result_number = WebDriverWait(driver, wait_time).until(ec.presence_of_element_located(
-        (By.CSS_SELECTOR, classname_result_number)))
+    # Check if search returns more results than required
     regex = re.compile("([0-9,.]+)")
     number = regex.findall(result_number.text)[0]
     number = int(re.sub(",", "", number))
-
-    # Check if search returns more results than required
-    if number > max_results:
+    if int(number) > int(limit):
         return None
 
-    # if a result is found - return the github results' list url
+    # if a result is found - return the url of the results' list
     return driver.current_url
