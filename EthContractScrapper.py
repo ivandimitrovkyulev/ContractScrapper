@@ -24,11 +24,13 @@ from selenium.webdriver import Chrome
 from selenium.webdriver.chrome.service import Service
 
 from helpers import (
-    exit_handler,
+    exit_handler_1,
+    exit_handler_2,
     github_search,
     get_last_n_contracts,
     telegram_send_message,
-    get_all_contracts,
+    get_all_verified_contracts,
+    get_all_search_contracts,
     CustomAction,
     formated,
     dict_complement_b,
@@ -36,7 +38,7 @@ from helpers import (
 )
 
 # Set up arguments, values and settings for the CLI
-software_ver = "1.0.0"
+software_ver = "1.1.0"
 web_choices = ("etherscan.io", "ropsten.etherscan.io", "kovan.etherscan.io", "rinkeby.etherscan.io",
                "goerli.etherscan.io", "beacon.etherscan.io", "ftmscan.com", "testnet.ftmscan.com",)
 type_search = ("repositories", "code", "commits", "issues", "discussions",
@@ -70,6 +72,12 @@ parser.add_argument("-c", action="store", type=str, dest="contracts",
                     help="Gets all the currently available verified contracts from the {0}website{1} "
                          "and saves them to {0}filename{1}.csv".format(TextFormat.U, TextFormat.END))
 
+parser.add_argument("-l", action="store", type=str, dest="search_code", nargs=3,
+                    metavar=(formated("filename"), formated("keyword"), formated("limit")),
+                    help="Searches smart contract which contain {0}keyword{1} in their code from the {0}website{1} "
+                         "and saves them to {0}filename{1}.csv, {0}limit{1} "
+                         "number of maximum returns.".format(TextFormat.U, TextFormat.END))
+
 parser.add_argument("-V", "--version", action="version", version=software_ver,
                     help="Prints the current version of the script.")
 
@@ -88,11 +96,11 @@ logging.basicConfig(filename=f"log_files/{web_name}.log", filemode='a',
                     format='%(asctime)s - %(message)s',
                     level=logging.INFO, datefmt='%Y/%m/%d %H:%M:%S')
 
-contract_cols = ["Address", "Contract Name", "Compiler", "Version", "Balance",
-                 "Txns", "Setting", "Verified", "Audited", "License"]
+contract_cols = ["Link to Contract", "Address", "Contract Name", "Compiler", "Version",
+                 "Balance", "Txns", "Setting", "Verified", "Audited", "License"]
 
 # If website argument provided, load driver
-if args.website and (args.contracts or args.scrape):
+if args.website and (args.contracts or args.scrape or args.search_code):
     # load Chrome driver and minimize window
     driver = Chrome(service=Service(os.getenv('CHROME_LOCATION')))
     driver.minimize_window()
@@ -103,22 +111,36 @@ if args.website and (args.contracts or args.scrape):
 else:
     parser.exit(0, "Please provide another argument.")
 
-# If -c contracts is triggered
+# If, -c contracts is triggered
 if args.contracts:
     filename = args.contracts + ".csv"
+    # Optional message to print to terminal
+    message = ""
 
     # Get all verified contracts and export to .csv
-    get_all_contracts(driver, website_name=web_url, column_names=contract_cols, filename=filename)
+    get_all_verified_contracts(driver, website_name=web_url, column_names=contract_cols, filename=filename)
 
-    print("{0} - {1} has stopped.".format(datetime.now().strftime('%Y/%m/%d %H:%M:%S'), program_name))
-    driver.close()
-    print("Driver closed.")
-    print("Contracts saved to {}".format(filename))
+    # Print message before exit
+    register(exit_handler_2, driver=driver, filename=filename, program_name=program_name, message=message)
 
-# If -s scrape is triggered
+# If -l, search_code is triggered
+if args.search_code:
+    filename = args.search_code[0] + ".csv"
+    keyword = args.search_code[1]
+    limit = int(args.search_code[2])
+    # Optional message to print to terminal
+    message = ""
+
+    # Get all verified contracts and export to .csv
+    get_all_search_contracts(driver, website_name=web_url, keyword=keyword, max_results=limit, filename=filename)
+
+    # Print message before exit
+    register(exit_handler_2, driver=driver, filename=filename, program_name=program_name, message=message)
+
+# If -s, scrape is triggered
 if args.scrape:
     # Exit handler function
-    register(exit_handler, driver=driver, name=program_name)
+    register(exit_handler_1, driver=driver, program_name=program_name)
 
     func_args = []
     try:
@@ -149,7 +171,7 @@ if args.scrape:
             # Search with contract's address first
             search_address = github_search(driver, contract_address, "Solidity", *func_args)
 
-            if search_address is str:
+            if search_address is not None:
                 # Send telegram message
                 message = "\nNew {0} Contract on Github:\n{1}".format(web_url, search_address)
                 telegram_send_message(message)
@@ -160,7 +182,7 @@ if args.scrape:
                 # Then try with contract's name
                 search_name = github_search(driver, contract_name, "Solidity", *func_args)
 
-                if search_name is str:
+                if search_name is not None:
                     # Send telegram message
                     message = "\nNew {0} Contract on Github:\n{1}".format(web_url, search_name)
                     telegram_send_message(message)

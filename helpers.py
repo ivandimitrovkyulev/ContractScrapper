@@ -4,6 +4,7 @@ from argparse import (
     Action,
     ArgumentParser,
 )
+from lxml import html
 from time import sleep
 from functools import wraps
 from datetime import datetime
@@ -28,7 +29,6 @@ from pandas import (
 from selenium.webdriver import Chrome
 from selenium.webdriver.support import expected_conditions as ec
 from selenium.webdriver.common.by import By
-from selenium.webdriver.remote.webelement import WebElement
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.common.exceptions import WebDriverException, TimeoutException
 
@@ -57,8 +57,8 @@ def formated(
     """Re formats the Text with the specified style.
     Defaults to bold.
 
-    text: text to be formatted
-    style: the style to re-format to, eg. bold, underline, etc. All available options can be
+    :param text: text to be formatted
+    :param style: the style to re-format to, eg. bold, underline, etc. All available options can be
     found in the TextFormat class using the dot operator"""
 
     # get a list of all available styles
@@ -77,7 +77,11 @@ def dict_complement_b(
         new_dict: dict,
 ) -> Dict[str, str]:
     """Compares dictionary A & B and returns the relative complement of A in B.
-    Basically returns all members in B that are not in A as a python dictionary."""
+    Basically returns all members in B that are not in A as a python dictionary -
+    as in Venn's diagrams.
+
+    :param old_dict: dictionary A
+    :param new_dict: dictionary B"""
 
     b_complement = {k: new_dict[k] for k in new_dict if k not in old_dict}
 
@@ -121,16 +125,16 @@ class CustomAction(Action):
             pass
 
 
-def exit_handler(
+def exit_handler_1(
         driver: Chrome,
-        name: str = "Program",
+        program_name: str = "Program",
         message: str = "",
 ) -> None:
     """This function will only execute before the end of the process.
 
-    driver: Selenium webdriver object
-    name: Program name
-    message: optional message to include"""
+    :param driver: Selenium webdriver object
+    :param program_name: Program name
+    :param message: Optional message to include"""
 
     # Make sure driver is closed if any part of the program returns an error
     driver.close()
@@ -139,9 +143,34 @@ def exit_handler(
     end_time = datetime.now().strftime('%Y/%m/%d %H:%M:%S')
 
     # Print any information to console as required
+    print("{0} – {1} has stopped.".format(end_time, program_name))
     print(message)
-    print("{0} – {1} has stopped.".format(end_time, name))
     print("Driver closed.")
+
+
+def exit_handler_2(
+        driver: Chrome,
+        filename: str,
+        program_name: str = "Program",
+        message: str = "",
+) -> None:
+    """This function will only execute before the end of the process.
+
+    :param driver: Selenium webdriver object
+    :param filename: File name
+    :param program_name: Program name
+    :param message: Optional message to include"""
+
+    # Make sure driver is closed if any part of the program returns an error
+    driver.close()
+
+    # Timestamp of when the program terminated
+    end_time = datetime.now().strftime('%Y/%m/%d %H:%M:%S')
+
+    print("{0} - {1} has stopped.".format(datetime.now().strftime('%Y/%m/%d %H:%M:%S'), program_name))
+    print(message)
+    print("Driver closed.")
+    print("Contracts saved to {}".format(filename))
 
 
 def driver_wait_exception_handler(
@@ -150,8 +179,7 @@ def driver_wait_exception_handler(
     """ Decorator that infinitely re-tries to query website for information until
     the website responds. Useful when websites enforce a query limit.
 
-    driver: Selenium webdriver object
-    wait_time: No. of seconds to wait until refreshes pages and tries again"""
+    :param wait_time: Seconds to wait until refreshes pages and tries again"""
 
     def decorator(func):
 
@@ -178,52 +206,65 @@ def driver_wait_exception_handler(
 
 
 def html_table_to_df(
-        content: WebElement,
+        driver: Chrome,
         column_names: List[str],
-        limit: int = 10000,
+        web_name: str,
 ) -> DataFrame:
     """Extracts the information from a HTML table,
     constructs and returns a Pandas DataFrame object of it.
 
-    content: a Selenium WebElement that is a HTML Table
-    column_names: A list of column names that matches the HTML table"""
+    :param driver: Selenium webdriver object with a specified get('url') method
+    :param column_names: A list of column names that matches the HTML table
+    :param web_name: Partial name, eg. etherscan.io"""
 
-    # All data
-    all_data = []
-    # Iterate through all table rows
-    rows = content.find_elements(By.TAG_NAME, "tr")
-    for index, row in enumerate(rows):
-        # if limit reached - break
-        if index == limit:
-            break
+    # Parse th html, returning a single document/element
+    root = html.fromstring(driver.page_source)
 
-        # Iterate through all columns in a row
-        columns = row.find_elements(By.TAG_NAME, "td")
-        element_info = [col.text for col in columns]
+    table = []
+    # Get all <tr> table elements
+    rows = root.xpath('.//table/tbody/tr')
+    for row in rows:
 
-        all_data.append(element_info)
+        contract = []
+        # Append contract url from first <td> of html table
+        link = row[0].xpath(".//a/@href")
+        contract_url = web_name + link[0]
+        contract.append(contract_url)
 
-    df = DataFrame(all_data, columns=column_names)
+        # Iterate through <td> elements
+        for cell in row:
+
+            # Get text from <td> element
+            cell_info = cell.xpath('.//text()')
+
+            # Discard empty elements
+            if len(cell_info) == 1:
+                contract.append(cell_info[0])
+            else:
+                contract.append(cell_info[1])
+
+        table.append(contract)
+
+    df = DataFrame(table, columns=column_names)
     return df
 
 
-@driver_wait_exception_handler()
-def get_all_contracts(
+def get_all_verified_contracts(
         driver: Chrome,
         website_name: str,
         column_names: List[str],
         filename: str = "contracts.csv",
-        wait_time: int = 20,
+        wait_time: int = 1,
 ) -> DataFrame:
     """Collects latest verified contracts and combines
     them into a Pandas DataFrame object and exports it to
     a specified .csv file.
 
-    driver: Selenium webdriver object
-    website_name: partial name of website eg. etherscan.io
-    column_names: list of column names to use in DataFrame construction
-    filename: name of file where data will be saved
-    wait_time: maximum no. of seconds to wait for a WebElement"""
+    :param driver: Selenium webdriver object
+    :param website_name: Partial name of website eg. etherscan.io
+    :param column_names: List of column names to use in DataFrame construction
+    :param filename: Name of file where data will be saved
+    :param wait_time: Max seconds to wait for a WebElement"""
 
     url = "https://{0}/contractsVerified/1?ps=100".format(website_name)
     driver.get(url)
@@ -231,13 +272,9 @@ def get_all_contracts(
     pages = []
     # Iterate through all the web pages
     while True:
-        # Get data from the HTML table for each page
-        css_content = "#transfers > div.table-responsive.mb-2.mb-md-0 > table > tbody"
-        content = WebDriverWait(driver, wait_time).until(ec.presence_of_element_located(
-            (By.CSS_SELECTOR, css_content)))
 
         # Construct DataFrame with each HTML table and save in list
-        page_info = html_table_to_df(content, column_names)
+        page_info = html_table_to_df(driver, column_names, website_name)
         pages.append(page_info)
 
         # Go to the next page
@@ -250,7 +287,114 @@ def get_all_contracts(
             break
 
     info = concat(pages, ignore_index=True)
-    info.to_csv(filename)
+    info.to_csv(filename, mode='a', index=False)
+
+    return info
+
+
+def search_contracts_to_df(
+        driver: Chrome,
+        web_name: str,
+        max_results: int = 20,
+) -> DataFrame:
+    """Searches for smart contracts from website, eg. etherscan.io, with a given keyword that
+    is contained in the solidity code. Returns a DataFrame with matching contracts.
+
+    :param driver: Selenium Webdriver object with a specified get('url') method
+    :param web_name: Partial name, eg. etherscan.io
+    :param max_results: Maximum number of contracts returned"""
+
+    columns = ["Link to Contract", "Contract Address", "Contract Name", "Date Published", "Transactions"]
+
+    # Get URL's page source
+    root = html.fromstring(driver.page_source)
+
+    table = []
+    # Get all contract data from current page
+    for index, contract in enumerate(root.find_class("card-body p-4")):
+
+        if index > max_results:
+            break
+
+        contract_info = []
+        identity = contract.find_class("text-truncate text-primary")[0]
+
+        # Construct the link for the to the contract address
+        partial_link = identity.xpath('.//@href')[0]
+        contract_link = "https://{0}{1}".format(web_name, partial_link)
+        contract_info.append(contract_link)
+
+        # add Contract address to list
+        address = identity.xpath('.//text()')[0]
+        contract_info.append(address)
+
+        elements = contract.xpath('.//div[2]/div/span')
+        try:
+            # Append name
+            contract_info.append(elements[0].text_content())
+            # Append date
+            contract_info.append(elements[1].text_content())
+
+            index = len(elements) - 1
+            txn = elements[index].text_content()
+            regex = re.compile(" ")
+            if "txn" in txn:
+                transaction = regex.split(txn)[1]
+                contract_info.append(transaction)
+            else:
+                contract_info.append("None")
+
+            # Append contract with its info to table
+            table.append(contract_info)
+        except IndexError:
+            continue
+
+    df = DataFrame(table, columns=columns)
+    return df
+
+
+def get_all_search_contracts(
+        driver: Chrome,
+        website_name: str,
+        keyword: str,
+        max_results: int = 20,
+        filename: str = "contracts.csv",
+        wait_time: int = 5,
+) -> DataFrame:
+    """Searches for smart contract code that contains the keyword provided
+    and combines them into a Pandas DataFrame object, which is exported to
+    a specified .csv file.
+
+    :param driver: Selenium webdriver object
+    :param website_name: Partial name of website eg. etherscan.io
+    :param keyword: Keyword that is contained in the smart contract code
+    :param max_results: Maximum number of contracts returned
+    :param filename: Name of file where data will be saved
+    :param wait_time: Max seconds to wait for a WebElement"""
+
+    # Construct a POST request URL
+    url = "https://{0}/searchcontractlist?q={1}&a=all&ps=100".format(website_name, keyword)
+    driver.get(url)
+
+    pages = []
+    # Iterate through all the web pages
+    while True:
+
+        # Construct DataFrame with each HTML table and save in list
+        page_info = search_contracts_to_df(driver, website_name, max_results)
+        pages.append(page_info)
+
+        # Go to the next page
+        try:
+            next_page = WebDriverWait(driver, wait_time).until(ec.presence_of_element_located(
+                (By.PARTIAL_LINK_TEXT, "Next")))
+            next_page.click()
+
+        except WebDriverException:
+            break
+
+    info = concat(pages, ignore_index=True)
+    info.to_csv(filename, mode='a', index=False)
 
     return info
 
@@ -268,10 +412,10 @@ def telegram_send_message(
     Follow telegram's instruction of how to set up a bot using the bot father
     and configure it to be able to send messages to a chat.
 
-    message: Text to be sent to the chat
-    disable_web_page_preview: Set web preview on/off
-    telegram_token: Telegram TOKEN API
-    telegram_chat_id: Telegram chat ID"""
+    :param message_text: Text to be sent to the chat
+    :param disable_web_page_preview: Set web preview on/off
+    :param telegram_token: Telegram TOKEN API, default take from .env
+    :param telegram_chat_id: Telegram chat ID, default take from .env"""
 
     # if URL not provided - try TOKEN variable from the .env file
     load_dotenv()
@@ -305,8 +449,10 @@ def get_last_n_contracts(
     """Returns a Python Dictionary with the first n number of specified contracts
     from the verified contracts page.
 
-    driver: Selenium webdriver object
-    website: website URL"""
+    :param driver: Selenium Webdriver object
+    :param website: Website URL
+    :param n: Number of contracts to be searching at a time
+    :param wait_time: Max seconds to wait"""
 
     url = "https://{0}/contractsVerified/1?ps=100".format(website)
     driver.get(url)
@@ -339,11 +485,13 @@ def github_search(
     """Searches for a project on Github's advanced search page,
     https://github.com/search/advanced.
 
-    driver: Selenium webdriver object
-    keyword: text to search with in the 'Advanced Search' field
-    language: programming language to be written in
-    wait_time: max no. of seconds to wait for WebElement
-    max_results: searches with more returned results will be discarded"""
+    :param driver: Selenium webdriver object
+    :param keyword: Text to search with in the 'Advanced Search' field
+    :param lang: Programming language to be written in
+    :param limit: Searches with more returned results will be discarded
+    :param type_search: what to search for, eg. repositories, code, commits, etc.
+    :param comments: Max comments on repository
+    :param wait_time: Max seconds to wait for WebElement"""
 
     if lang != "":
         lang = lang.lower()
