@@ -6,6 +6,7 @@ charset-normalizer==2.0.12
 cryptography==36.0.1
 h11==0.13.0
 idna==3.3
+lxml==4.8.0
 numpy==1.22.2
 outcome==1.1.0
 pandas==1.4.1

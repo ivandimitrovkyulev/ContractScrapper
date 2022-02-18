@@ -1,4 +1,4 @@
-# Ethereum Contract Scrapper v1.0.0
+# Ethereum Contract Scrapper v1.1.0
 This script scans for new Verified Solidity Smart Contracts from selected websites and
 checks whether they have repos on Github. Searches either with contract address or contract name.
 If a contract is found on Github, based on search parameters, a notification with the repo link is sent to a specified Telegram chat.
@@ -63,6 +63,15 @@ python EthContractScrapper.py etherscan.io -c contracts
 python EthContractScrapper.py ropsten.etherscan.io -s 7 repositories 5
 ```
 , where **ropsten.etherscan.io** is website to scrape, **-s** argument for scraping, **7** is the github search limit beyond which the script does not return results, look for **repositories** in github and repos with **5** minimum comments. Continuously saves the results in **../ContractScrapper/log_files/ropsten-etherscan-io.log**
+
+<br/>
+
+**Example 3.** Search smart contracts with a keyword that is present in their solidity code:
+
+```
+python EthContractScrapper.py etherscan.io -l contracts safemath 30
+```
+, where **etherscan.io** is website to scrape, **-l** argument for scraping, **contracts** is the filename to save into to, **safemath** keyword to be present in the .sol code, **30** maximum number of results to be saved.
 
 <br/>
 Email: ivandkyulev@gmail.com
