@@ -1,4 +1,4 @@
-# Ethereum Contract Scrapper v1.1.0
+# Ethereum Contract Scrapper v2.0.0
 This script scans for new Verified Solidity Smart Contracts from selected websites and
 checks whether they have repos on Github. Searches either with contract address or contract name.
 If a contract is found on Github, based on search parameters, a notification with the repo link is sent to a specified Telegram chat.

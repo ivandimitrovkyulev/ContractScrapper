@@ -1,13 +1,10 @@
 """
-This script scans etherscan.io or ftmscan.com for new Verified Smart Contracts and then
-checks whether they have repos on Github using either contract address or contract name.
-It looks for repositories written in Solidity. If a contract is found on Github a notification
-with the repo link is sent to a specified Telegram chat. The script saves all the found contracts
-in a .log file inside your working directory.
+This program scans for Verified Smart Contracts from selected websites.
 
-Usage:
-python3 EthContractScrapper.py eth # for etherscan.io
-python3 EthContractScrapper.py ftm # for ftmscan.com
+For more info please refer to https://github.com/ivandimitrovkyulev/ContractScrapper
+
+Open source and free to use.
+
 """
 
 import os
@@ -19,90 +16,96 @@ from time import sleep
 from argparse import ArgumentParser
 from atexit import register
 from datetime import datetime
-from dotenv import load_dotenv
+
 from selenium.webdriver import Chrome
 from selenium.webdriver.chrome.service import Service
 
-from helpers import (
-    exit_handler_1,
-    exit_handler_2,
+from common import __version__
+from common.message import telegram_send_message
+
+from common.helpers import (
     github_search,
     get_last_n_contracts,
-    telegram_send_message,
     get_all_verified_contracts,
     get_all_search_contracts,
-    CustomAction,
-    formated,
     dict_complement_b,
+)
+from common.exceptions import (
+    exit_handler_1,
+    exit_handler_2,
+)
+from common.format import (
+    formatted,
     TextFormat,
 )
+from common.cli import (
+    CustomActionSearch,
+    CustomActionScrape,
+)
+from common.variables import (
+    CHROME_LOCATION,
+    web_choices,
+    type_search,
+    contract_cols,
+)
 
-# Set up arguments, values and settings for the CLI
-software_ver = "1.1.0"
-web_choices = ("etherscan.io", "ropsten.etherscan.io", "kovan.etherscan.io", "rinkeby.etherscan.io",
-               "goerli.etherscan.io", "beacon.etherscan.io", "ftmscan.com", "testnet.ftmscan.com",)
-type_search = ("repositories", "code", "commits", "issues", "discussions",
-               "registrypackages", "marketplace", "topics", "wikis", "users")
 
 # Create CLI interface
 parser = ArgumentParser(
-    usage="python %(prog)s {0} [-s {1} {2} {3}] [-c {4}]".format(
-        formated("website"), formated("limit"), formated("type"),
-        formated("comments"), formated("filename")),
+    usage="python %(prog)s {0}website{1} [-s {0}limit{1} {0}type{1} {0}comments{1}] "
+          "[-c {0}filename{1}] [-l {0}filename{1} {0}keyword{1} {0}limit{1}]".format(
+            TextFormat.U, TextFormat.END),
     description="Scrapes smart contracts and checks if they have a github repository. "
                 "Visit {0}https://github.com/ivandimitrovkyulev/ContractScrapper{1} "
                 "for more info.".format(TextFormat.U, TextFormat.END),
-    epilog=f"Version - ContractScrapper {software_ver}", )
+    epilog=f"Version - %(prog)s {__version__}",
+)
 
 # Add all the neccessary CLI arguments
-parser.add_argument("website", action="store", type=str, choices=web_choices,
-                    metavar=formated("website"),
-                    help="Select from the following options: {}".format(web_choices))
-
-parser.add_argument("-s", action=CustomAction, type=str, dest="scrape", nargs='*',
-                    options=type_search,
-                    metavar=formated("limit"),
-                    help="Continuously scraping for new verified contracts from {0} and checks if they have a "
-                         "Github repository. If something is found it sends a Telegram message with the results to "
-                         "a specified chat. Also keeps a .log file with the results. Kill the script to exit.".format(
-                        formated("website")))
-
-parser.add_argument("-c", action="store", type=str, dest="contracts",
-                    metavar=formated("filename"),
-                    help="Gets all the currently available verified contracts from the {0}website{1} "
-                         "and saves them to {0}filename{1}.csv".format(TextFormat.U, TextFormat.END))
-
-parser.add_argument("-l", action="store", type=str, dest="search_code", nargs=3,
-                    metavar=(formated("filename"), formated("keyword"), formated("limit")),
-                    help="Searches smart contract which contain {0}keyword{1} in their code from the {0}website{1} "
-                         "and saves them to {0}filename{1}.csv, {0}limit{1} "
-                         "number of maximum returns.".format(TextFormat.U, TextFormat.END))
-
-parser.add_argument("-V", "--version", action="version", version=software_ver,
-                    help="Prints the current version of the script.")
-
-# Parse the .env file and load its variables
-load_dotenv()
+parser.add_argument(
+    "website", action="store", type=str, choices=web_choices,
+    metavar=formatted("website"),
+    help=f"Select from the following options: {web_choices}"
+)
+parser.add_argument(
+    "-s", action=CustomActionScrape, type=str, dest="scrape", nargs='*',
+    options=type_search, metavar=formatted("limit"),
+    help=f"Continuously scraping for new verified contracts from {formatted('website')} and checks if they have a "
+         "Github repository. If something is found it sends a Telegram message with the results to "
+         "a specified chat. Also keeps a .log file with the results. Kill the script to exit."
+)
+parser.add_argument(
+    "-c", action="store", type=str, dest="contracts", metavar=formatted("filename"),
+    help="Gets all the currently available verified contracts from the {0}website{1} "
+         "and saves them to {0}filename{1}.csv".format(TextFormat.U, TextFormat.END)
+)
+parser.add_argument(
+    "-l", action=CustomActionSearch, type=str, dest="code", nargs='*',
+    metavar=formatted("filename"),
+    help="Searches smart contract which contain {0}keyword{1} in their code from the "
+         "{0}website{1} and saves them to {0}filename{1}.csv, {0}limit{1} "
+         "number of maximum returns.".format(TextFormat.U, TextFormat.END)
+)
+parser.add_argument(
+    "-V", "--version", action="version", version=__version__,
+    help="Prints the current version of the script."
+)
 
 # Name of website to be scrapped
 args = parser.parse_args()
 web_url = args.website
-program_name = os.path.basename(__file__)
-program_dir = os.path.dirname(__file__)
 web_name = re.sub("\.", "-", web_url)
+program_name = os.path.basename(__file__)
 
 # Configure logging settings for the Application
 logging.basicConfig(filename=f"log_files/{web_name}.log", filemode='a',
                     format='%(asctime)s - %(message)s',
                     level=logging.INFO, datefmt='%Y/%m/%d %H:%M:%S')
 
-contract_cols = ["Link to Contract", "Address", "Contract Name", "Compiler", "Version",
-                 "Balance", "Txns", "Setting", "Verified", "Audited", "License"]
-
 # If website argument provided, load driver
-if args.website and (args.contracts or args.scrape or args.search_code):
+if args.contracts or args.scrape or args.code:
     # load Chrome driver and minimize window
-    driver = Chrome(service=Service(os.getenv('CHROME_LOCATION')))
+    driver = Chrome(service=Service(CHROME_LOCATION))
     driver.minimize_window()
 
     # Start scraping
@@ -111,7 +114,7 @@ if args.website and (args.contracts or args.scrape or args.search_code):
 else:
     parser.exit(0, "Please provide another argument.")
 
-# If, -c contracts is triggered
+# If -c, trigger contracts
 if args.contracts:
     filename = args.contracts + ".csv"
     # Optional message to print to terminal
@@ -123,11 +126,11 @@ if args.contracts:
     # Print message before exit
     register(exit_handler_2, driver=driver, filename=filename, program_name=program_name, message=message)
 
-# If -l, search_code is triggered
-if args.search_code:
-    filename = args.search_code[0] + ".csv"
-    keyword = args.search_code[1]
-    limit = int(args.search_code[2])
+# If -l, trigger code
+if args.code:
+    filename = args.code[0] + ".csv"
+    keyword = args.code[1]
+    limit = int(args.code[2])
     # Optional message to print to terminal
     message = ""
 
@@ -137,7 +140,7 @@ if args.search_code:
     # Print message before exit
     register(exit_handler_2, driver=driver, filename=filename, program_name=program_name, message=message)
 
-# If -s, scrape is triggered
+# If -s, trigger scrape
 if args.scrape:
     # Exit handler function
     register(exit_handler_1, driver=driver, program_name=program_name)

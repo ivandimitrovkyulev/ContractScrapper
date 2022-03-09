@@ -1,75 +1,24 @@
 import re
-import os
-from argparse import (
-    Action,
-    ArgumentParser,
-)
+
 from lxml import html
 from time import sleep
-from functools import wraps
-from datetime import datetime
-from dotenv import load_dotenv
+
 from typing import (
     List,
     Dict,
     Union,
-    Callable,
-    TypeVar,
-    Optional,
 )
-from requests import (
-    post,
-    Response,
-)
-
 from pandas import (
     DataFrame,
     concat,
 )
 from selenium.webdriver import Chrome
-from selenium.webdriver.support import expected_conditions as ec
 from selenium.webdriver.common.by import By
+from selenium.webdriver.support import expected_conditions as ec
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.common.exceptions import WebDriverException, TimeoutException
 
-
-# Define a Function type
-Function = TypeVar("Function")
-
-
-class TextFormat:
-    """Class that implements different text formatting styles."""
-
-    B = '\033[1m'  # Bold
-    U = '\033[4m'  # Underline
-    IT = '\x1B[3m'  # Italic
-    RED = '\033[91m'
-    GREEN = '\033[92m'
-    BLUE = '\033[94m'
-    YELLOW = '\033[93m'
-    END = '\033[0m'  # Every style must have an 'END' at the end
-
-
-def formated(
-        text: str,
-        style: str = 'U',
-) -> str:
-    """Re formats the Text with the specified style.
-    Defaults to bold.
-
-    :param text: text to be formatted
-    :param style: the style to re-format to, eg. bold, underline, etc. All available options can be
-    found in the TextFormat class using the dot operator"""
-
-    # get a list of all available styles
-    style_keys = [i for i in TextFormat.__dict__.keys() if i[0] != '_']
-
-    # make sure selected style is available
-    assert style in style_keys, "Style not available, please choose from {}".format(style_keys)
-
-    styled_text = "{0}{1}{2}".format(TextFormat.__dict__[style], text, TextFormat.END)
-
-    return styled_text
+from common.exceptions import driver_wait_exception_handler
 
 
 def dict_complement_b(
@@ -86,123 +35,6 @@ def dict_complement_b(
     b_complement = {k: new_dict[k] for k in new_dict if k not in old_dict}
 
     return b_complement
-
-
-class CustomAction(Action):
-    def __init__(self, options, *args, **kwargs):
-        self.options = options
-        super(CustomAction, self).__init__(*args, **kwargs)
-
-    def __call__(self, parser, namespace, values, option_string=None):
-
-        if len(values) > 3:
-            ArgumentParser().error(
-                message="argument {0}: {1} arguments provided, expected max {2}".format(
-                    option_string, len(values), 3))
-
-        try:
-            if int(values[0]) >= 0:
-                setattr(namespace, self.dest, values)
-            else:
-                ArgumentParser().error(
-                    message="argument {0}: invalid choice: '{1}', choose value >= 0".format(
-                        option_string, values[0]))
-
-            if values[1] in self.options:
-                setattr(namespace, self.dest, values)
-            else:
-                ArgumentParser().error(
-                    message="argument {0}: invalid choice: '{1}', choose from {2}".format(
-                        option_string, values[1], self.options))
-
-            if int(values[2]) >= 0:
-                setattr(namespace, self.dest, values)
-            else:
-                ArgumentParser().error(
-                    message="argument {0}: invalid choice: '{1}', choose value >= 0".format(
-                        option_string, values[2]))
-        except IndexError:
-            pass
-
-
-def exit_handler_1(
-        driver: Chrome,
-        program_name: str = "Program",
-        message: str = "",
-) -> None:
-    """This function will only execute before the end of the process.
-
-    :param driver: Selenium webdriver object
-    :param program_name: Program name
-    :param message: Optional message to include"""
-
-    # Make sure driver is closed if any part of the program returns an error
-    driver.close()
-
-    # Timestamp of when the program terminated
-    end_time = datetime.now().strftime('%Y/%m/%d %H:%M:%S')
-
-    # Print any information to console as required
-    print("{0} – {1} has stopped.".format(end_time, program_name))
-    print(message)
-    print("Driver closed.")
-
-
-def exit_handler_2(
-        driver: Chrome,
-        filename: str,
-        program_name: str = "Program",
-        message: str = "",
-) -> None:
-    """This function will only execute before the end of the process.
-
-    :param driver: Selenium webdriver object
-    :param filename: File name
-    :param program_name: Program name
-    :param message: Optional message to include"""
-
-    # Make sure driver is closed if any part of the program returns an error
-    driver.close()
-
-    # Timestamp of when the program terminated
-    end_time = datetime.now().strftime('%Y/%m/%d %H:%M:%S')
-
-    print("{0} - {1} has stopped.".format(datetime.now().strftime('%Y/%m/%d %H:%M:%S'), program_name))
-    print(message)
-    print("Driver closed.")
-    print("Contracts saved to {}".format(filename))
-
-
-def driver_wait_exception_handler(
-        wait_time: int = 10,
-) -> Callable[[Function], Function]:
-    """ Decorator that infinitely re-tries to query website for information until
-    the website responds. Useful when websites enforce a query limit.
-
-    :param wait_time: Seconds to wait until refreshes pages and tries again"""
-
-    def decorator(func):
-
-        @wraps(func)
-        def wrapper(*args, **kwargs):
-
-            while True:
-                try:
-                    value = func(*args, **kwargs)
-
-                except WebDriverException or TimeoutException:
-                    # if unable to get WebElement - wait & repeat
-                    sleep(wait_time)
-
-                else:
-                    # if able to retrieve WebElement break loop
-                    break
-
-            return value
-
-        return wrapper
-
-    return decorator
 
 
 def html_table_to_df(
@@ -397,46 +229,6 @@ def get_all_search_contracts(
     info.to_csv(filename, mode='a', index=False)
 
     return info
-
-
-def telegram_send_message(
-        message_text: str,
-        disable_web_page_preview: bool = True,
-        telegram_token: Optional[str] = "",
-        telegram_chat_id: Optional[str] = "",
-) -> Response:
-    r"""Sends a Telegram message to a specified chat.
-    Must have a .env file with the following variables:
-    TOKEN: your Telegram access token.
-    CHAT_ID: the specific id of the chat you want the message sent to
-    Follow telegram's instruction of how to set up a bot using the bot father
-    and configure it to be able to send messages to a chat.
-
-    :param message_text: Text to be sent to the chat
-    :param disable_web_page_preview: Set web preview on/off
-    :param telegram_token: Telegram TOKEN API, default take from .env
-    :param telegram_chat_id: Telegram chat ID, default take from .env"""
-
-    # if URL not provided - try TOKEN variable from the .env file
-    load_dotenv()
-    if telegram_token == "":
-        telegram_token = str(os.getenv('TOKEN'))
-
-    # if chat_id not provided - try CHAT_ID variable from the .env file
-    if telegram_chat_id == "":
-        telegram_chat_id = str(os.getenv('CHAT_ID'))
-
-    # construct url using token for a sendMessage POST request
-    url = "https://api.telegram.org/bot{}/sendMessage".format(telegram_token)
-
-    # Construct data for the request
-    data = {"chat_id": telegram_chat_id, "text": message_text,
-            "disable_web_page_preview": disable_web_page_preview}
-
-    # send the POST request
-    post_request = post(url, data)
-
-    return post_request
 
 
 @driver_wait_exception_handler()
