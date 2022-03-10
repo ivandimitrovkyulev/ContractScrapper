@@ -15,7 +15,7 @@ from selenium.common.exceptions import WebDriverException, TimeoutException
 Function = TypeVar("Function")
 
 
-def exit_handler_1(
+def exit_handler(
         driver: Chrome,
         program_name: str = "Program",
         message: str = "",
@@ -33,34 +33,9 @@ def exit_handler_1(
     end_time = datetime.now().strftime('%Y/%m/%d %H:%M:%S')
 
     # Print any information to console as required
-    print("{0} – {1} has stopped.".format(end_time, program_name))
-    print(message)
+    print(f"{end_time} – {program_name} has finished.")
     print("Driver closed.")
-
-
-def exit_handler_2(
-        driver: Chrome,
-        filename: str,
-        program_name: str = "Program",
-        message: str = "",
-) -> None:
-    """This function will only execute before the end of the process.
-
-    :param driver: Selenium webdriver object
-    :param filename: File name
-    :param program_name: Program name
-    :param message: Optional message to include"""
-
-    # Make sure driver is closed if any part of the program returns an error
-    driver.close()
-
-    # Timestamp of when the program terminated
-    end_time = datetime.now().strftime('%Y/%m/%d %H:%M:%S')
-
-    print("{0} - {1} has stopped.".format(end_time, program_name))
     print(message)
-    print("Driver closed.")
-    print("Contracts saved to {}".format(filename))
 
 
 def driver_wait_exception_handler(

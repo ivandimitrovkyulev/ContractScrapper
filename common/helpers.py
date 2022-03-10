@@ -12,6 +12,8 @@ from pandas import (
     DataFrame,
     concat,
 )
+from multiprocessing.dummy import Pool
+
 from selenium.webdriver import Chrome
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as ec
@@ -45,11 +47,11 @@ def html_table_to_df(
     """Extracts the information from a HTML table,
     constructs and returns a Pandas DataFrame object of it.
 
-    :param driver: Selenium webdriver object with a specified get('url') method
+    :param driver: Selenium webdriver object
     :param column_names: A list of column names that matches the HTML table
     :param web_name: Partial name, eg. etherscan.io"""
 
-    # Parse th html, returning a single document/element
+    # Parse the html, returning a single document/element
     root = html.fromstring(driver.page_source)
 
     table = []
@@ -98,7 +100,7 @@ def get_all_verified_contracts(
     :param filename: Name of file where data will be saved
     :param wait_time: Max seconds to wait for a WebElement"""
 
-    url = "https://{0}/contractsVerified/1?ps=100".format(website_name)
+    url = "https://{0}/contractsVerified/{1}?ps=100".format(website_name, 1)
     driver.get(url)
 
     pages = []
@@ -188,9 +190,9 @@ def search_contracts_to_df(
 def get_all_search_contracts(
         driver: Chrome,
         website_name: str,
+        filename: str,
         keyword: str,
         max_results: int = 20,
-        filename: str = "contracts.csv",
         wait_time: int = 5,
 ) -> DataFrame:
     """Searches for smart contract code that contains the keyword provided
@@ -199,10 +201,17 @@ def get_all_search_contracts(
 
     :param driver: Selenium webdriver object
     :param website_name: Partial name of website eg. etherscan.io
+    :param filename: Name of file where data will be saved
     :param keyword: Keyword that is contained in the smart contract code
     :param max_results: Maximum number of contracts returned
-    :param filename: Name of file where data will be saved
     :param wait_time: Max seconds to wait for a WebElement"""
+
+    if filename.split(".")[-1] == "csv":
+        pass
+    else:
+        filename += ".csv"
+
+    max_results = int(max_results)
 
     # Construct a POST request URL
     url = "https://{0}/searchcontractlist?q={1}&a=all&ps=100".format(website_name, keyword)
