@@ -1,4 +1,6 @@
 import re
+import copy
+import logging
 
 from lxml import html
 from time import sleep
@@ -12,7 +14,6 @@ from pandas import (
     DataFrame,
     concat,
 )
-from multiprocessing.dummy import Pool
 
 from selenium.webdriver import Chrome
 from selenium.webdriver.common.by import By
@@ -21,6 +22,7 @@ from selenium.webdriver.support.ui import WebDriverWait
 from selenium.common.exceptions import WebDriverException, TimeoutException
 
 from common.exceptions import driver_wait_exception_handler
+from common.message import telegram_send_message
 
 
 def dict_complement_b(
@@ -147,7 +149,7 @@ def search_contracts_to_df(
     # Get all contract data from current page
     for index, contract in enumerate(root.find_class("card-body p-4")):
 
-        if index > max_results:
+        if index >= max_results:
             break
 
         contract_info = []
@@ -329,3 +331,73 @@ def github_search(
 
     # if a result is found - return the url of the results' list
     return driver.current_url
+
+
+def contract_scraping(
+        driver: Chrome,
+        web_url: str,
+        arguments: List,
+):
+    """
+    Continuously scrapes contracts and checks for a github repo. If a match, that satisfies the
+    search criteria, is found it sends a Telegram message to a specified chat. Also keeps a .log
+    file with the results.
+
+    :param driver: Selenium web driver object
+    :param web_url: String of the url being scrapped
+    :param arguments: A list of arguments to be processed
+    """
+
+    web_name = re.sub(r"\.", "-", web_url)
+    # try to append website, limit, type & comments
+
+    # Configure logging settings for the Application
+    logging.basicConfig(filename=f"log_files/{web_name}.log", filemode='a',
+                        format='%(asctime)s - %(message)s',
+                        level=logging.INFO, datefmt='%Y/%m/%d %H:%M:%S')
+
+    print(f"Started logging in log_files/{web_name}.log")
+
+    old_contracts = get_last_n_contracts(driver, web_url)
+    while True:
+        new_contracts = get_last_n_contracts(driver, web_url)
+
+        # Compare dicts and return new ones
+        found_contracts = dict_complement_b(old_contracts, new_contracts)
+        for key, value in found_contracts.items():
+
+            # Contract address eg. 0xf7sgf683hf...
+            contract_address = re.split(" ", value)[0]
+            # Contract name eg. UniswapV3
+            contract_name = re.split(" ", value)[1]
+
+            # Search with contract's address first
+            search_address = github_search(driver, contract_address, "Solidity", *arguments)
+
+            if search_address is not None:
+                # Send telegram message
+                message = "\nNew {0} Contract on Github:\n{1}".format(web_url, search_address)
+                telegram_send_message(message)
+                # Log info
+                logging.info([search_address, value])
+
+            else:
+                # Then try with contract's name
+                search_name = github_search(driver, contract_name, "Solidity", *arguments)
+
+                if search_name is not None:
+                    # Send telegram message
+                    message = "\nNew {0} Contract on Github:\n{1}".format(web_url, search_name)
+                    telegram_send_message(message)
+                    # Log info
+                    logging.info([search_name, value])
+
+                else:
+                    # Log info
+                    logging.info([search_name, value])
+
+        # Update Dictionary with latest contracts
+        old_contracts = copy.copy(new_contracts)
+
+        # Wait for 30 seconds
+        sleep(30)

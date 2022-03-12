@@ -10,27 +10,22 @@ Open source and free to use.
 import os
 import sys
 import re
-import logging
-import copy
 
-from time import sleep
 from argparse import ArgumentParser
 from atexit import register
 from datetime import datetime
+from multiprocessing.dummy import Pool
 
 from selenium.webdriver import Chrome
 from selenium.webdriver.chrome.service import Service
 
 from common import __version__
 from common.exceptions import exit_handler
-from common.message import telegram_send_message
 
 from common.helpers import (
-    github_search,
-    get_last_n_contracts,
     get_all_verified_contracts,
     get_all_search_contracts,
-    dict_complement_b,
+    contract_scraping
 )
 from common.format import (
     formatted,
@@ -53,7 +48,7 @@ from common.variables import (
 parser = ArgumentParser(
     usage="python %(prog)s "
           "[-s {0}website{1} {0}limit{1} {0}type{1} {0}comments{1}] "
-          "[-ms {0}website{1} {0}limit{1} {0}type{1} {0}comments{1}] "
+          "[-ms {0}websites{1} {0}limit{1} {0}type{1} {0}comments{1}] "
           "[-c {0}website{1} {0}filename{1}] "
           "[-l {0}website{1} {0}filename{1} {0}keyword{1} {0}limit{1}]".format(
             TextFormat.U, TextFormat.END),
@@ -66,17 +61,24 @@ parser = ArgumentParser(
 # Add all the necessary CLI arguments
 parser.add_argument(
     "-ms", action=CustomActionScrape, type=str, dest="multi_scrape", nargs='*',
-    options=type_search, metavar=formatted("website"),
-    help=f"Continuously scraping for new verified contracts from {formatted('website')} and checks if they have a "
-         "Github repository. If something is found it sends a Telegram message with the results to "
-         "a specified chat. Also keeps a .log file with the results. Kill the script to exit."
+    options=(web_choices, type_search), metavar=formatted("websites"),
+    help=f"Continuously scraping for new verified contracts from selected {formatted('websites')} and checks "
+         f"if they have a Github repository. If something is found it sends a Telegram message with the results to "
+         f"a specified chat. Also keeps a .log file with the results. To select multiple {formatted('websites')} "
+         f"provide a single string delimited with whitespace, eg. 'etherscan.io ftmscan.com'. Provide "
+         f"{formatted('limit')} to limit return results from Github. Parameter {formatted('type')} is for type "
+         f"of Github search, eg. repo, users, commits etc. Parameter {formatted('comments')} is for max number of "
+         f"comments on repo. Kill the script to exit."
 )
 parser.add_argument(
     "-s", action=CustomActionScrape, type=str, dest="scrape", nargs='*',
-    options=type_search, metavar=formatted("website"),
+    options=(web_choices, type_search), metavar=formatted("website"),
     help=f"Continuously scraping for new verified contracts from {formatted('website')} and checks if they have a "
-         "Github repository. If something is found it sends a Telegram message with the results to "
-         "a specified chat. Also keeps a .log file with the results. Kill the script to exit."
+         f"Github repository. If something is found it sends a Telegram message with the results to "
+         f"a specified chat. Also keeps a .log file with the results. Provide {formatted('limit')} to limit"
+         f"return results from Github. Parameter {formatted('type')} is for type of Github search, eg. repo, "
+         f"users, commits etc. Parameter {formatted('comments')} is for max number of comments on repo. "
+         f"Kill the script to exit."
 )
 parser.add_argument(
     "-l", action=CustomActionSearch, type=str, dest="code", nargs='*',
@@ -100,10 +102,9 @@ parser.add_argument(
 args = parser.parse_args()
 program_name = os.path.basename(__file__)
 program_dir = os.getcwd()
-print(args)
 
 # If website argument provided, load driver
-if args.multi_scrape or args.scrape or args.code or args.contracts:
+if  args.scrape or args.code or args.contracts:
     # load Chrome driver and minimize window
     driver = Chrome(service=Service(CHROME_LOCATION))
     driver.minimize_window()
@@ -111,101 +112,67 @@ if args.multi_scrape or args.scrape or args.code or args.contracts:
     # Start scraping
     start_time = datetime.now().strftime('%Y/%m/%d %H:%M:%S')
     print("{0} – {1} has started.".format(start_time, program_name))
+elif args.multi_scrape:
+    pass
 else:
     sys.exit("Please provide at least one additional argument.")
 
 
-# web_url = args.website
-# web_name = re.sub("\.", "-", web_url)
-
 # If -c, trigger contracts
 if args.contracts:
     filename = args.contracts[1] + ".csv"
-    # Optional message to print to terminal
+    # Exit handler function with optional message
     message = f"Results saved in {program_dir}/{formatted(filename)}"
     web_url = args.contracts[0]
 
     # Print message before exit
-    register(exit_handler, driver=driver, program_name=program_name, message=message)
+    register(exit_handler, driver, program_name, message)
 
     # Get all verified contracts and export to .csv
     get_all_verified_contracts(driver, website_name=web_url, column_names=contract_cols, filename=filename)
 
 # If -l, trigger code
 if args.code:
-    try:
-        code_args = [x for x in args.code]
-    except IndexError:
-        pass
-    # Optional message to print to terminal
+    # Get arguments
+    code_args = [x for x in args.code]
+
     filename = args.code[1]
+    # Exit handler function with optional message
     message = f"Results saved in {program_dir}/{formatted(filename)}"
-    # Print message before exit
-    register(exit_handler, driver=driver, program_name=program_name, message=message)
+    register(exit_handler, driver, program_name, message)
 
     # Get all verified contracts and export to .csv
     get_all_search_contracts(driver, *code_args)
 
 # If -s, trigger scrape
 if args.scrape:
-    # Optional message to print to terminal
-    message = ""
-    # Exit handler function
-    register(exit_handler, driver=driver, program_name=program_name, message=message)
+    web_url, *scrape_args = args.scrape
+    web_name = re.sub(r"\.", "-", web_url)
 
-    # Configure logging settings for the Application
-    logging.basicConfig(filename=f"log_files/{web_name}.log", filemode='a',
-                        format='%(asctime)s - %(message)s',
-                        level=logging.INFO, datefmt='%Y/%m/%d %H:%M:%S')
+    # Exit handler function with optional message
+    message = f"Results saved in {program_dir}/{web_name}.log"
+    register(exit_handler, driver, program_name, message)
 
-    # try to append limit, type & comments
-    try:
-        scrape_args = [x for x in args.scrape]
-    except IndexError:
-        pass
+    contract_scraping(driver, web_url, scrape_args)
 
-    print(f"Started logging in log_files/{web_name}.log")
+# If -ms, trigger multi_scrape
+if args.multi_scrape:
+    urls, *arguments = args.multi_scrape
+    web_urls = [url for url in urls.split(" ")]
+    web_names = [re.sub(r"\.", "-", name) for name in web_urls]
 
-    old_contracts = get_last_n_contracts(driver, web_url)
-    while True:
-        new_contracts = get_last_n_contracts(driver, web_url)
+    drivers = [Chrome(service=Service(CHROME_LOCATION)) for x in web_names]
+    messages = [f"Results saved in {program_dir}/{name}.log" for name in web_names]
 
-        # Compare dicts and return new ones
-        found_contracts = dict_complement_b(old_contracts, new_contracts)
-        for key, value in found_contracts.items():
+    register_args = [(exit_handler, driver, program_dir, message)
+                     for driver, message in zip(drivers, messages)]
+    scrape_args = [(driver, url, arguments)
+                   for driver, url in zip(drivers, web_urls)]
 
-            # Contract address eg. 0xf7sgf683hf...
-            contract_address = re.split(" ", value)[0]
-            # Contract name eg. UniswapV3
-            contract_name = re.split(" ", value)[1]
+    # Multiprocessing Pool with web_urls number of processes
+    with Pool(len(web_urls)) as pool:
+        # Exit handler function with optional message
+        pool.starmap(register, register_args)
 
-            # Search with contract's address first
-            search_address = github_search(driver, contract_address, "Solidity", *scrape_args)
-
-            if search_address is not None:
-                # Send telegram message
-                message = "\nNew {0} Contract on Github:\n{1}".format(web_url, search_address)
-                telegram_send_message(message)
-                # Log info
-                logging.info([search_address, value])
-
-            else:
-                # Then try with contract's name
-                search_name = github_search(driver, contract_name, "Solidity", *scrape_args)
-
-                if search_name is not None:
-                    # Send telegram message
-                    message = "\nNew {0} Contract on Github:\n{1}".format(web_url, search_name)
-                    telegram_send_message(message)
-                    # Log info
-                    logging.info([search_name, value])
-
-                else:
-                    # Log info
-                    logging.info([search_name, value])
-
-        # Update Dictionary with latest contracts
-        old_contracts = copy.copy(new_contracts)
-
-        # Wait for 30 seconds
-        sleep(30)
+        # Start scraping
+        results = pool.starmap(contract_scraping, scrape_args)
