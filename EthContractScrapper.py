@@ -104,7 +104,7 @@ program_name = os.path.basename(__file__)
 program_dir = os.getcwd()
 
 # If website argument provided, load driver
-if  args.scrape or args.code or args.contracts:
+if args.scrape or args.code or args.contracts:
     # load Chrome driver and minimize window
     driver = Chrome(service=Service(CHROME_LOCATION))
     driver.minimize_window()

@@ -18,6 +18,7 @@ TOKEN = os.getenv('TOKEN')
 CHAT_ID = os.getenv('CHAT_ID')
 CHROME_LOCATION = os.getenv('CHROME_LOCATION')
 
+log_format = "%(asctime)s - %(levelname)s - %(message)s"
 
 web_choices = (
     "etherscan.io",

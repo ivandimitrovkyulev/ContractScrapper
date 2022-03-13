@@ -1,6 +1,5 @@
 import re
 import copy
-import logging
 
 from lxml import html
 from time import sleep
@@ -14,6 +13,7 @@ from pandas import (
     DataFrame,
     concat,
 )
+from datetime import datetime
 
 from selenium.webdriver import Chrome
 from selenium.webdriver.common.by import By
@@ -23,6 +23,7 @@ from selenium.common.exceptions import WebDriverException, TimeoutException
 
 from common.exceptions import driver_wait_exception_handler
 from common.message import telegram_send_message
+from common.logger import logger_setup
 
 
 def dict_complement_b(
@@ -352,9 +353,7 @@ def contract_scraping(
     # try to append website, limit, type & comments
 
     # Configure logging settings for the Application
-    logging.basicConfig(filename=f"log_files/{web_name}.log", filemode='a',
-                        format='%(asctime)s - %(message)s',
-                        level=logging.INFO, datefmt='%Y/%m/%d %H:%M:%S')
+    logger = logger_setup(web_name, f"log_files/{web_name}.log")
 
     print(f"Started logging in log_files/{web_name}.log")
 
@@ -379,7 +378,9 @@ def contract_scraping(
                 message = "\nNew {0} Contract on Github:\n{1}".format(web_url, search_address)
                 telegram_send_message(message)
                 # Log info
-                logging.info([search_address, value])
+                logger.info([search_address, value])
+                # Print result to console
+                print("{} - {}, {}".format(datetime.now(), search_address, value))
 
             else:
                 # Then try with contract's name
@@ -390,11 +391,15 @@ def contract_scraping(
                     message = "\nNew {0} Contract on Github:\n{1}".format(web_url, search_name)
                     telegram_send_message(message)
                     # Log info
-                    logging.info([search_name, value])
+                    logger.info([search_name, value])
+                    # Print result to console
+                    print("{} - {}, {}".format(datetime.now(), search_name, value))
 
                 else:
                     # Log info
-                    logging.info([search_name, value])
+                    logger.info([search_name, value])
+                    # Print result to console
+                    print("{} - {}, {}".format(datetime.now(), search_name, value))
 
         # Update Dictionary with latest contracts
         old_contracts = copy.copy(new_contracts)
